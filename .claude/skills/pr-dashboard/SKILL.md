@@ -1,20 +1,24 @@
 ---
 name: pr-dashboard
-description: "Launch, configure, and troubleshoot the local PR dashboard — a React app that shows the GitHub pull requests you need to act on (to review, ready to merge, blocked, awaiting review, drafts) via your gh CLI auth. Use when the user wants to open/start their PR dashboard, scope it to specific GitHub orgs, or fix it when it shows nothing or errors."
+description: "Launch, configure, and troubleshoot the local GitHub dashboard — a React app that shows everything waiting on you on GitHub via your gh CLI auth: pull requests (to review, ready to merge, blocked, drafts), issues (assigned, stale, mentions), the notification inbox (unread, moved-since-read, opened-and-forgotten, clearable) and project-board tasks by sprint and epic. Use when the user wants to open/start their PR or GitHub dashboard, scope it to specific GitHub orgs or repos, or fix it when a tab shows nothing or errors."
 argument-hint: "[orgs]"
 ---
 
-# PR dashboard
+# GitHub dashboard
 
-A local dashboard of the GitHub PRs you need to act on. It shells out to the `gh` CLI on every
-refresh, categorizes each PR (reviews to do, ready to merge, approved-but-blocked, awaiting review,
-changes requested, drafts, …), and serves a React UI on `http://localhost:7337`.
+A local dashboard of everything GitHub is waiting on you for. It shells out to the `gh` CLI on
+every refresh and serves a React UI on `http://localhost:7337` with five tabs: **Focus**,
+**Pull requests**, **Issues**, **Notifications**, **Boards**.
 
-Use this skill to **launch**, **configure** (which orgs), or **troubleshoot** it.
+Use this skill to **launch**, **configure** (which orgs/repos), or **troubleshoot** it.
 
 ## Prerequisites
 
 - `gh` authenticated — `gh auth status` (the dashboard has no auth of its own; it uses yours).
+- Two extra token scopes for the full dashboard:
+  `gh auth refresh -s notifications,read:project`
+  — `notifications` powers the Notifications tab, `read:project` the Boards tab. Each source
+  degrades on its own: missing scopes empty one tab and print a warning, nothing else breaks.
 - Node 18+.
 
 ## Launch
@@ -23,43 +27,56 @@ Use this skill to **launch**, **configure** (which orgs), or **troubleshoot** it
 cd ~/pr-dashboard && npm install && npm run dev
 ```
 
-Opens `http://localhost:7337` automatically and auto-refreshes every 90s. Set `BROWSER=<app>` to
-choose which browser opens it, or `PR_DASH_NO_OPEN=1` to not open one. Port `7337` is fixed
-(`strictPort`); if it's taken, stop the other process or change the port in `vite.config.mjs`.
+Opens `http://localhost:7337` automatically and auto-refreshes every 120s. Set `BROWSER=<app>`
+to choose the browser, `PR_DASH_NO_OPEN=1` for none, `PR_DASH_PORT=<n>` for another port
+(`strictPort` is on, so a taken port fails fast instead of drifting).
 
-## Configure the orgs
+Shortcuts in the UI: <kbd>1</kbd>–<kbd>5</kbd> tabs, <kbd>/</kbd> filter box, <kbd>r</kbd> refresh.
 
-By default it shows PRs across **all** orgs you touch. To scope it:
+## Configure the scope
 
-- **One-off**: `PR_DASH_ORGS=org-a,org-b npm run dev`.
+By default it covers **all** orgs you touch. To scope it:
+
+- **One-off**: `PR_DASH_ORGS=org-a,org-b npm run dev` (and `PR_DASH_REPOS=org-c/repo`).
 - **Persistent**: write `pr-dashboard.config.json` at the repo root:
 
   ```json
-  { "orgs": ["org-a", "org-b"] }
+  { "orgs": ["org-a", "org-b"], "repos": ["org-c/one-repo"] }
   ```
 
-  (`pr-dashboard.config.example.json` is the template.) The env var wins over the file; an empty
-  list means no filter. This config file is git-ignored — it's personal to your checkout.
+  (`pr-dashboard.config.example.json` is the template.) Env vars win over the file; empty lists
+  mean no filter. `repos` pulls in individual repositories outside the listed orgs. This config
+  file is git-ignored — it's personal to your checkout.
 
-## How it categorizes (so you can reason about what shows up)
+## What lands where (so you can reason about what shows up)
 
-It runs three `gh search prs` queries — authored by you, review-requested from you, reviewed by you
-— then fetches details and buckets each PR:
-
-- **Your PRs**: draft → `drafts`; approved + green + no conflict → `readyToMerge`; approved but
-  conflicting/red → `approvedBlocked`; changes requested → `changesRequested`; else → `awaitingReview`.
-- **Others' PRs**: review requested from you → `reviewsToDo`; you requested changes → `iBlocked`;
-  else (you approved) → `iApproved`.
-
-CI status per PR is summarized from the check rollup (failing / gated / running / passing).
+- **Pull requests** — from `gh search prs` (authored / review-requested / reviewed / assigned),
+  then `gh pr view` per PR. Your PRs: draft → `drafts`; approved + green + no conflict →
+  `readyToMerge`; approved but conflicting/red → `approvedBlocked`; changes requested →
+  `changesRequested`; else `awaitingReview`. Others' PRs: review requested from you (or assigned
+  to you, unreviewed) → `reviewsToDo`; you requested changes → `iBlocked`; else `iApproved`.
+- **Issues / Boards** — one GraphQL sweep of issues and PRs assigned to, authored by or
+  mentioning you, carrying their Projects v2 field values. Issues bucket into assigned, assigned
+  &-stale (14+ days idle), mentions, authored, closed-this-week. Board rows group by sprint
+  (iteration field, current one detected from its start date and duration), epic, status or
+  priority. Epic resolution order: `Epic`-style board field → sub-issue parent → `epic:` label →
+  milestone.
+- **Notifications** — `/notifications?all=true` plus a batched GraphQL lookup of each subject's
+  state, which is what splits *unread* / *moved since you read it* / *opened then forgotten*
+  (read, uncleared, still open) / *handled, safe to clear* (read, closed or merged).
+- **Focus** — a ranked cross-source list (now / next / cleanup) built in `server/dashboard.mjs`.
 
 ## Troubleshoot
 
-- **Empty dashboard** → check `gh auth status`; confirm your org filter isn't excluding everything
-  (`echo $PR_DASH_ORGS`, inspect `pr-dashboard.config.json`); hit `/api/prs?force=1` to bypass the
-  30s cache and read any error JSON.
-- **Slow / rate-limited** → the server pools detail fetches (6 at a time) and caches for 30s; a very
-  large PR set will be slower on first load.
+- **A single tab is empty** → check the warning banner: it names the missing scope. Run
+  `gh auth refresh -s notifications,read:project`.
+- **Everything empty** → `gh auth status`; check the org filter isn't excluding it all
+  (`echo $PR_DASH_ORGS`, inspect `pr-dashboard.config.json`); hit
+  `/api/dashboard?force=1` to bypass the 60s cache and read the `errors` and `warnings` arrays.
+- **Partial-data banner** → each entry names its source and the `gh` error verbatim; the rest of
+  the dashboard is still live.
+- **Slow first load** → PR details are fetched with one `gh pr view` per PR (6 in flight) and
+  every source is cached 60s; a large PR set is slower on first paint.
 - **Wrong CI/state** → the data mirrors `gh pr view --json …`; if `gh` shows it differently, the
   dashboard will too.
 

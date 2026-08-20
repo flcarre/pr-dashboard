@@ -1,59 +1,18 @@
-import {execFile} from "node:child_process"
-import {promisify} from "node:util"
-import {readFileSync} from "node:fs"
-
-const exec = promisify(execFile)
-const MAX_BUFFER = 64 * 1024 * 1024
-const CACHE_MS = 30_000
-
-function loadOrgs() {
-    if (process.env.PR_DASH_ORGS) {
-        return process.env.PR_DASH_ORGS.split(",").map((s) => s.trim()).filter(Boolean)
-    }
-    try {
-        const cfg = JSON.parse(readFileSync(new URL("../pr-dashboard.config.json", import.meta.url)))
-        if (Array.isArray(cfg.orgs)) return cfg.orgs.filter(Boolean)
-    } catch {}
-    return []
-}
-
-const ORGS = loadOrgs()
-
-let cache = {at: 0, data: null}
-
-async function gh(args) {
-    const {stdout} = await exec("gh", args, {maxBuffer: MAX_BUFFER})
-    return stdout
-}
-
-async function ghJson(args) {
-    return JSON.parse(await gh(args))
-}
-
-async function pool(items, size, fn) {
-    const out = new Array(items.length)
-    let cursor = 0
-    const workers = Array.from({length: Math.min(size, items.length)}, async () => {
-        while (cursor < items.length) {
-            const idx = cursor++
-            out[idx] = await fn(items[idx], idx)
-        }
-    })
-    await Promise.all(workers)
-    return out
-}
+import {gh, ghJson, inScope, pool, viewer, cleanMessage} from "./gh.mjs"
 
 function summarizeCi(rollup) {
     const checks = rollup || []
     let fail = 0
     let pending = 0
     let gated = 0
+    const failing = []
     for (const x of checks) {
         const conclusion = (x.conclusion || "").toUpperCase()
         const status = (x.status || "").toUpperCase()
         const state = (x.state || "").toUpperCase()
         if (["FAILURE", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE"].includes(conclusion) || ["FAILURE", "ERROR"].includes(state)) {
             fail++
+            if (failing.length < 4) failing.push(x.name || x.context || "check")
         } else if (conclusion === "ACTION_REQUIRED" || status === "ACTION_REQUIRED") {
             gated++
         } else if (["IN_PROGRESS", "QUEUED", "PENDING", "WAITING", "REQUESTED"].includes(status) || state === "PENDING" || (!conclusion && status && status !== "COMPLETED")) {
@@ -79,7 +38,7 @@ function summarizeCi(rollup) {
         tone = "green"
         label = "passing"
     }
-    return {fail, pending, gated, total, tone, label}
+    return {fail, pending, gated, total, tone, label, failing}
 }
 
 function repoFromUrl(url) {
@@ -109,7 +68,7 @@ function effectiveMyReview(reviews, me) {
     return commented ? "COMMENTED" : null
 }
 
-function classify(pr, sources, me) {
+function classify(pr, sources) {
     if (pr.mine) {
         if (pr.isDraft) return "drafts"
         if (pr.reviewDecision === "APPROVED") {
@@ -121,27 +80,47 @@ function classify(pr, sources, me) {
         return "awaitingReview"
     }
     if (sources.has("requested")) return "reviewsToDo"
+    if (sources.has("assigned") && !pr.myReview) return "reviewsToDo"
     if (pr.myReview === "CHANGES_REQUESTED") return "iBlocked"
     return "iApproved"
 }
 
-export async function getPrs({force = false} = {}) {
-    if (!force && cache.data && Date.now() - cache.at < CACHE_MS) return cache.data
+const LIST_FIELDS = "number,url,repository"
+const DETAIL_FIELDS = [
+    "number",
+    "title",
+    "url",
+    "author",
+    "isDraft",
+    "reviewDecision",
+    "mergeStateStatus",
+    "mergeable",
+    "statusCheckRollup",
+    "reviews",
+    "reviewRequests",
+    "latestReviews",
+    "labels",
+    "assignees",
+    "additions",
+    "deletions",
+    "changedFiles",
+    "createdAt",
+    "updatedAt",
+].join(",")
 
-    const me = (await gh(["api", "user", "--jq", ".login"])).trim()
-    const listFields = "number,url,repository"
-    const [authored, requested, reviewed] = await Promise.all([
-        ghJson(["search", "prs", "--author", "@me", "--state", "open", "--limit", "100", "--json", listFields]),
-        ghJson(["search", "prs", "--review-requested", "@me", "--state", "open", "--limit", "100", "--json", listFields]),
-        ghJson(["search", "prs", "--reviewed-by", "@me", "--state", "open", "--limit", "100", "--json", listFields]),
+export async function getPrs() {
+    const me = await viewer()
+    const [authored, requested, reviewed, assigned] = await Promise.all([
+        ghJson(["search", "prs", "--author", "@me", "--state", "open", "--limit", "100", "--json", LIST_FIELDS]),
+        ghJson(["search", "prs", "--review-requested", "@me", "--state", "open", "--limit", "100", "--json", LIST_FIELDS]),
+        ghJson(["search", "prs", "--reviewed-by", "@me", "--state", "open", "--limit", "100", "--json", LIST_FIELDS]),
+        ghJson(["search", "prs", "--assignee", "@me", "--state", "open", "--limit", "100", "--json", LIST_FIELDS]),
     ])
 
     const sourcesByUrl = new Map()
     const register = (list, src) => {
-        for (const p of list) {
-            const owner = p.repository?.nameWithOwner || ""
-            const org = owner.split("/")[0]
-            if (ORGS.length && !ORGS.includes(org)) continue
+        for (const p of list || []) {
+            if (!inScope(p.repository?.nameWithOwner || "")) continue
             const entry = sourcesByUrl.get(p.url) || new Set()
             entry.add(src)
             sourcesByUrl.set(p.url, entry)
@@ -150,14 +129,14 @@ export async function getPrs({force = false} = {}) {
     register(authored, "authored")
     register(requested, "requested")
     register(reviewed, "reviewed")
+    register(assigned, "assigned")
 
     const urls = [...sourcesByUrl.keys()]
-    const detailFields = "number,title,url,author,isDraft,reviewDecision,mergeStateStatus,mergeable,statusCheckRollup,reviews,reviewRequests,latestReviews,updatedAt"
     const details = await pool(urls, 6, async (url) => {
         try {
-            return await ghJson(["pr", "view", url, "--json", detailFields])
+            return await ghJson(["pr", "view", url, "--json", DETAIL_FIELDS])
         } catch (e) {
-            return {url, error: String(e?.message || e)}
+            return {url, error: cleanMessage(e)}
         }
     })
 
@@ -182,6 +161,7 @@ export async function getPrs({force = false} = {}) {
         const ci = summarizeCi(d.statusCheckRollup)
         const myReview = effectiveMyReview(d.reviews, me)
         const pr = {
+            kind: "pr",
             repo: repoFromUrl(d.url),
             number: d.number,
             title: d.title,
@@ -191,23 +171,37 @@ export async function getPrs({force = false} = {}) {
             reviewDecision: d.reviewDecision || null,
             mergeStateStatus: d.mergeStateStatus || null,
             mergeable: d.mergeable || null,
+            labels: (d.labels || []).map((l) => ({name: l.name, color: l.color})),
+            assignees: (d.assignees || []).map((a) => a.login),
+            additions: d.additions ?? null,
+            deletions: d.deletions ?? null,
+            changedFiles: d.changedFiles ?? null,
+            createdAt: d.createdAt,
             updatedAt: d.updatedAt,
             ci,
             myReview,
             reviewers: buildReviewers(d.latestReviews, d.reviewRequests),
             mine: d.author?.login === me,
+            sources: [...sources],
+            boards: [],
         }
-        const bucket = classify({...pr, ci}, sources, me)
+        const bucket = classify(pr, sources)
         groups[bucket].push(pr)
     }
 
     const rank = {red: 0, orange: 1, blue: 2, green: 3, neutral: 4}
     for (const key of Object.keys(groups)) {
         if (key === "errors") continue
-        groups[key].sort((a, b) => (rank[a.ci.tone] - rank[b.ci.tone]) || (b.updatedAt || "").localeCompare(a.updatedAt || ""))
+        groups[key].sort((a, b) => rank[a.ci.tone] - rank[b.ci.tone] || (b.updatedAt || "").localeCompare(a.updatedAt || ""))
     }
 
-    const data = {me, generatedAt: new Date().toISOString(), groups}
-    cache = {at: Date.now(), data}
-    return data
+    return {me, groups}
 }
+
+/** Kept for the standalone /api/prs endpoint. */
+export async function getPrsPayload() {
+    const {me, groups} = await getPrs()
+    return {me, generatedAt: new Date().toISOString(), groups}
+}
+
+export {summarizeCi}

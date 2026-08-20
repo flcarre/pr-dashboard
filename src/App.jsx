@@ -1,139 +1,46 @@
-import React, {useCallback, useEffect, useMemo, useState} from "react"
+import React, {useCallback, useEffect, useMemo, useRef, useState} from "react"
+import {useHotkeys, useSticky} from "./ui.jsx"
+import {cx, timeAgo} from "./lib/format.js"
+import Focus from "./views/Focus.jsx"
+import Prs from "./views/Prs.jsx"
+import Issues from "./views/Issues.jsx"
+import Inbox from "./views/Inbox.jsx"
+import Boards from "./views/Boards.jsx"
 
-const SECTIONS = [
-    {key: "reviewsToDo", title: "Reviews to do", emoji: "🔴", hint: "Others are waiting on your review"},
-    {key: "readyToMerge", title: "Ready to merge", emoji: "🟢", hint: "Approved, green CI, no conflicts"},
-    {key: "approvedBlocked", title: "Approved, blocked", emoji: "🟠", hint: "Conflicts or red CI to fix"},
-    {key: "awaitingReview", title: "Awaiting review", emoji: "🟡", hint: "Your PRs waiting for a reviewer"},
-    {key: "changesRequested", title: "Changes requested", emoji: "✋", hint: "A reviewer is blocking your PRs"},
-    {key: "iApproved", title: "I approved (others)", emoji: "👀", hint: "Waiting for merge by the author or a maintainer"},
-    {key: "iBlocked", title: "I requested changes", emoji: "⛔", hint: "Waiting for the author's fix"},
-    {key: "drafts", title: "Drafts", emoji: "📝", hint: "Your draft PRs"},
+const REFRESH_MS = 120_000
+
+const TABS = [
+    {key: "focus", label: "Focus", hint: "Everything waiting on you, ranked"},
+    {key: "prs", label: "Pull requests", hint: "Reviews to do, your PRs, what you are blocking"},
+    {key: "issues", label: "Issues", hint: "Assigned, mentioned, authored, recently closed"},
+    {key: "inbox", label: "Notifications", hint: "Unread, moved-since-read, opened-and-forgotten, clearable"},
+    {key: "boards", label: "Boards", hint: "Project board items by sprint, epic, status"},
 ]
 
-const REVIEW_LABELS = {
-    APPROVED: {text: "approved", tone: "green"},
-    CHANGES_REQUESTED: {text: "changes requested", tone: "red"},
-    REVIEW_REQUIRED: {text: "needs review", tone: "neutral"},
-    COMMENTED: {text: "commented", tone: "blue"},
-}
-
-const MERGE_LABELS = {
-    CLEAN: {text: "mergeable", tone: "green"},
-    DIRTY: {text: "conflicts", tone: "red"},
-    BLOCKED: {text: "blocked", tone: "neutral"},
-    UNSTABLE: {text: "unstable", tone: "orange"},
-    BEHIND: {text: "behind", tone: "orange"},
-}
-
-const REVIEWER_STATE = {
-    APPROVED: {mark: "✓", tone: "green"},
-    CHANGES_REQUESTED: {mark: "✕", tone: "red"},
-    COMMENTED: {mark: "💬", tone: "blue"},
-    REQUESTED: {mark: "•", tone: "neutral"},
-    PENDING: {mark: "•", tone: "neutral"},
-    DISMISSED: {mark: "–", tone: "neutral"},
-}
-
-function timeAgo(iso) {
-    if (!iso) return ""
-    const diff = Date.now() - new Date(iso).getTime()
-    const mins = Math.round(diff / 60000)
-    if (mins < 60) return `${mins}m`
-    const hours = Math.round(mins / 60)
-    if (hours < 24) return `${hours}h`
-    const days = Math.round(hours / 24)
-    return `${days}d`
-}
-
-function Badge({tone, children}) {
-    return <span className={`badge tone-${tone}`}>{children}</span>
-}
-
-function repoShort(repo) {
-    return repo.split("/")[1] || repo
-}
-
-function repoClass(repo) {
-    let h = 0
-    for (let i = 0; i < repo.length; i++) h = (h * 31 + repo.charCodeAt(i)) >>> 0
-    return `c${h % 6}`
-}
-
-function Reviewers({reviewers}) {
-    if (!reviewers || reviewers.length === 0) {
-        return <div className="reviewers empty">No reviewer assigned</div>
-    }
-    return (
-        <div className="reviewers">
-            <span className="reviewers-label">Reviewers</span>
-            {reviewers.map((r) => {
-                const s = REVIEWER_STATE[r.state] || {mark: "•", tone: "neutral"}
-                return (
-                    <span key={r.login} className={`reviewer tone-${s.tone}`} title={r.state}>
-                        {r.team ? "△ " : "@"}
-                        {r.login} <span className="reviewer-mark">{s.mark}</span>
-                    </span>
-                )
-            })}
-        </div>
-    )
-}
-
-function Card({pr}) {
-    const review = pr.reviewDecision ? REVIEW_LABELS[pr.reviewDecision] : null
-    const merge = pr.mergeStateStatus ? MERGE_LABELS[pr.mergeStateStatus] : null
-    return (
-        <a className="card" href={pr.url} target="_blank" rel="noreferrer">
-            <div className="card-top">
-                <span className={`repo repo-${repoClass(pr.repo)}`}>{repoShort(pr.repo)}</span>
-                <span className="num">#{pr.number}</span>
-                <span className="ago">{timeAgo(pr.updatedAt)}</span>
-            </div>
-            <div className="card-title">{pr.title}</div>
-            <div className="card-badges">
-                {review && <Badge tone={review.tone}>{review.text}</Badge>}
-                <Badge tone={pr.ci.tone}>CI: {pr.ci.label}</Badge>
-                {merge && <Badge tone={merge.tone}>{merge.text}</Badge>}
-                {!pr.mine && pr.myReview && <span className="you">you:&nbsp;{(REVIEW_LABELS[pr.myReview] || {text: pr.myReview.toLowerCase()}).text}</span>}
-                {pr.author && <span className="author">@{pr.author}</span>}
-            </div>
-            <Reviewers reviewers={pr.reviewers} />
-        </a>
-    )
-}
-
-function Section({def, prs}) {
-    if (!prs || prs.length === 0) return null
-    return (
-        <section className="section">
-            <header className="section-head">
-                <h2>
-                    <span className="emoji">{def.emoji}</span>
-                    {def.title}
-                    <span className="count">{prs.length}</span>
-                </h2>
-                <p className="hint">{def.hint}</p>
-            </header>
-            <div className="grid">
-                {prs.map((pr) => (
-                    <Card key={pr.url} pr={pr} />
-                ))}
-            </div>
-        </section>
-    )
+function badgeFor(tab, stats) {
+    if (!stats) return null
+    if (tab === "focus") return null
+    if (tab === "prs") return stats.reviewsToDo || null
+    if (tab === "issues") return stats.assignedIssues || null
+    if (tab === "inbox") return stats.unread || null
+    if (tab === "boards") return stats.sprintItems || null
+    return null
 }
 
 export default function App() {
     const [data, setData] = useState(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
+    const [tab, setTab] = useSticky("tab", "focus")
+    const [query, setQuery] = useState("")
+    const [autoRefresh, setAutoRefresh] = useSticky("autoRefresh", true)
+    const searchRef = useRef(null)
 
     const load = useCallback(async (force) => {
         setLoading(true)
         setError(null)
         try {
-            const res = await fetch(`/api/prs${force ? "?force=1" : ""}`)
+            const res = await fetch(`/api/dashboard${force ? "?force=1" : ""}`)
             const json = await res.json()
             if (json.error) throw new Error(json.error)
             setData(json)
@@ -146,24 +53,64 @@ export default function App() {
 
     useEffect(() => {
         load(false)
-        const id = setInterval(() => load(true), 90_000)
-        return () => clearInterval(id)
     }, [load])
 
-    const total = useMemo(() => {
-        if (!data) return 0
-        return SECTIONS.reduce((n, s) => n + (data.groups[s.key]?.length || 0), 0)
+    useEffect(() => {
+        if (!autoRefresh) return
+        const id = setInterval(() => load(true), REFRESH_MS)
+        return () => clearInterval(id)
+    }, [autoRefresh, load])
+
+    const hotkeys = useMemo(
+        () => ({
+            r: () => load(true),
+            "/": () => searchRef.current?.focus(),
+            "1": () => setTab("focus"),
+            "2": () => setTab("prs"),
+            "3": () => setTab("issues"),
+            "4": () => setTab("inbox"),
+            "5": () => setTab("boards"),
+        }),
+        [load, setTab],
+    )
+    useHotkeys(hotkeys)
+
+    const scopeLabel = useMemo(() => {
+        if (!data) return ""
+        const {orgs = [], repos = []} = data.scope || {}
+        if (!orgs.length && !repos.length) return "all orgs"
+        return [...orgs, ...repos].join(", ")
     }, [data])
 
     return (
         <div className="app">
             <header className="topbar">
                 <div className="brand">
-                    <h1>My PRs</h1>
-                    {data && <span className="me">@{data.me}</span>}
+                    <h1>GitHub dashboard</h1>
+                    {data?.me && <span className="me">@{data.me}</span>}
+                    {scopeLabel && <span className="scope" title="Scope — set PR_DASH_ORGS or pr-dashboard.config.json">{scopeLabel}</span>}
                 </div>
                 <div className="controls">
-                    {data && <span className="total">{total} PRs</span>}
+                    <input
+                        ref={searchRef}
+                        className="search"
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        placeholder="Filter (press /)"
+                        spellCheck={false}
+                    />
+                    {query && (
+                        <button className="ghost" onClick={() => setQuery("")} title="Clear filter">
+                            ✕
+                        </button>
+                    )}
+                    <button
+                        className={cx("ghost", autoRefresh && "on")}
+                        onClick={() => setAutoRefresh(!autoRefresh)}
+                        title={autoRefresh ? `Auto-refresh every ${REFRESH_MS / 1000}s — click to pause` : "Auto-refresh paused — click to resume"}
+                    >
+                        {autoRefresh ? "auto" : "paused"}
+                    </button>
                     {data && <span className="stamp">updated {timeAgo(data.generatedAt)} ago</span>}
                     <button className="refresh" onClick={() => load(true)} disabled={loading}>
                         {loading ? "…" : "↻ Refresh"}
@@ -171,38 +118,56 @@ export default function App() {
                 </div>
             </header>
 
-            {error && <div className="banner error">Error: {error}</div>}
-            {loading && !data && <div className="banner">Loading PRs via gh…</div>}
+            <nav className="tabs">
+                {TABS.map((t) => {
+                    const badge = badgeFor(t.key, data?.stats)
+                    return (
+                        <button key={t.key} className={cx("tab", tab === t.key && "active")} onClick={() => setTab(t.key)} title={t.hint}>
+                            {t.label}
+                            {badge ? <span className="tab-badge">{badge}</span> : null}
+                        </button>
+                    )
+                })}
+            </nav>
+
+            {error && <div className="banner error">Could not reach the dashboard API: {error}</div>}
+            {loading && !data && <div className="banner">Loading pull requests, issues, notifications and boards via gh…</div>}
+
+            {data?.errors?.length > 0 && (
+                <div className="banner warn">
+                    <strong>Partial data.</strong>
+                    <ul>
+                        {data.errors.slice(0, 6).map((e, i) => (
+                            <li key={i}>
+                                <code>{e.source}</code>: {e.error}
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            )}
+            {data?.warnings?.length > 0 && (
+                <div className="banner subtle">
+                    {data.warnings.map((w, i) => (
+                        <div key={i}>{w}</div>
+                    ))}
+                </div>
+            )}
 
             {data && (
                 <main className="content">
-                    {SECTIONS.map((def) => (
-                        <Section key={def.key} def={def} prs={data.groups[def.key]} />
-                    ))}
-                    {data.groups.errors?.length > 0 && (
-                        <section className="section">
-                            <header className="section-head">
-                                <h2>
-                                    <span className="emoji">⚠️</span>
-                                    Failed to load
-                                    <span className="count">{data.groups.errors.length}</span>
-                                </h2>
-                            </header>
-                            <div className="grid">
-                                {data.groups.errors.map((e) => (
-                                    <a key={e.url} className="card" href={e.url} target="_blank" rel="noreferrer">
-                                        <div className="card-title">{e.url}</div>
-                                        <div className="card-badges">
-                                            <Badge tone="red">{e.error.slice(0, 80)}</Badge>
-                                        </div>
-                                    </a>
-                                ))}
-                            </div>
-                        </section>
-                    )}
-                    {total === 0 && <div className="banner">Nothing to do. 🎉</div>}
+                    {tab === "focus" && <Focus data={data} query={query} onGo={setTab} />}
+                    {tab === "prs" && <Prs prs={data.prs} query={query} />}
+                    {tab === "issues" && <Issues issues={data.issues} query={query} staleDays={data.staleDays} />}
+                    {tab === "inbox" && <Inbox notifications={data.notifications} query={query} />}
+                    {tab === "boards" && <Boards boards={data.boards} query={query} warnings={data.warnings} />}
                 </main>
             )}
+
+            <footer className="footer">
+                <span>
+                    Shortcuts: <kbd>1</kbd>–<kbd>5</kbd> tabs · <kbd>/</kbd> filter · <kbd>r</kbd> refresh
+                </span>
+            </footer>
         </div>
     )
 }

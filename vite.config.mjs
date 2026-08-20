@@ -1,25 +1,38 @@
 import {execFile} from "node:child_process"
 import {defineConfig} from "vite"
 import react from "@vitejs/plugin-react"
-import {getPrs} from "./server/prs.mjs"
+import {getPrsPayload} from "./server/prs.mjs"
+import {getDashboard} from "./server/dashboard.mjs"
 
-const PORT = 7337
+const PORT = Number(process.env.PR_DASH_PORT || 7337)
 const DEFAULT_BROWSER = "Dia"
+
+const ROUTES = {
+    "/api/dashboard": async (url) => {
+        const sections = (url.searchParams.get("sections") || "")
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        return getDashboard({force: url.searchParams.get("force") === "1", sections})
+    },
+    "/api/prs": async () => getPrsPayload(),
+}
 
 function ghApi() {
     return {
-        name: "gh-pr-api",
+        name: "gh-dashboard-api",
         configureServer(server) {
             server.middlewares.use(async (req, res, next) => {
-                if (!req.url || req.url.split("?")[0] !== "/api/prs") return next()
-                const force = req.url.includes("force=1")
+                if (!req.url) return next()
+                const url = new URL(req.url, "http://localhost")
+                const handler = ROUTES[url.pathname]
+                if (!handler) return next()
+                res.setHeader("content-type", "application/json")
+                res.setHeader("cache-control", "no-store")
                 try {
-                    const data = await getPrs({force})
-                    res.setHeader("content-type", "application/json")
-                    res.end(JSON.stringify(data))
+                    res.end(JSON.stringify(await handler(url)))
                 } catch (e) {
                     res.statusCode = 500
-                    res.setHeader("content-type", "application/json")
                     res.end(JSON.stringify({error: String(e?.message || e)}))
                 }
             })
