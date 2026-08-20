@@ -11,6 +11,8 @@ small React app on `localhost:7337`.
 cd ~/pr-dashboard && npm install && npm run dev
 ```
 
+Scoped to one org in a single command — `npm run dev:kestra` is `PR_DASH_ORGS=kestra-io npm run dev`.
+
 Opens `http://localhost:7337` automatically (in Dia; set `BROWSER=Chrome` to override).
 Auto-refreshes every 120s — the **auto** button pauses it, **Refresh** forces a fetch.
 

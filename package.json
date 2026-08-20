@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:kestra": "PR_DASH_ORGS=kestra-io vite",
     "build": "vite build",
     "preview": "vite preview"
   },
