@@ -94,6 +94,18 @@ function focusList({prs, issues, notifications, boards}) {
     for (const n of notifications?.groups.newActivity || []) {
         push({urgency: "soon", lane: "inbox", title: n.title, url: n.url, repo: n.repo, number: n.number, why: "New activity since you last read it", updatedAt: n.updatedAt})
     }
+    for (const issue of issues?.prMerged || []) {
+        push({
+            urgency: "later",
+            lane: "close",
+            title: issue.title,
+            url: issue.url,
+            repo: issue.repo,
+            number: issue.number,
+            why: `PR #${issue.prSummary.primary.number} merged — close the issue?`,
+            updatedAt: issue.updatedAt,
+        })
+    }
     for (const issue of issues?.assignedStale || []) {
         push({urgency: "later", lane: "stale", title: issue.title, url: issue.url, repo: issue.repo, number: issue.number, why: `Assigned, untouched for ${issue.ageDays}d`, updatedAt: issue.updatedAt})
     }
@@ -118,8 +130,12 @@ function buildStats({prs, issues, notifications, boards}) {
         myOpenPrs: prs ? prCount(prs.groups, ["readyToMerge", "approvedBlocked", "awaitingReview", "changesRequested", "drafts"]) : null,
         readyToMerge: prs ? prs.groups.readyToMerge.length : null,
         blockedPrs: prs ? prCount(prs.groups, ["approvedBlocked", "changesRequested"]) : null,
-        assignedIssues: issues ? issues.assigned.length + issues.assignedStale.length : null,
+        assignedIssues: issues
+            ? issues.assigned.length + issues.assignedStale.length + issues.prMerged.filter((i) => i.assignedToMe).length
+            : null,
         staleIssues: issues ? issues.assignedStale.length : null,
+        issuesToClose: issues ? issues.prMerged.length : null,
+        issuesWithoutPr: issues ? issues.assigned.concat(issues.assignedStale).filter((i) => i.prSummary?.state === "none").length : null,
         unread: notifications ? notifications.groups.todo.length : null,
         forgotten: notifications ? notifications.groups.forgotten.length + notifications.groups.newActivity.length : null,
         clearable: notifications ? notifications.groups.handled.length : null,
@@ -176,6 +192,7 @@ export async function getDashboard({force = false, sections = ALL_SECTIONS} = {}
         notifications: notifications ? {groups: notifications.groups, reasons: notifications.reasons, total: notifications.total, truncated: notifications.truncated} : null,
         focus: focusList({prs, issues, notifications, boards}),
         stats: buildStats({prs, issues, notifications, boards}),
+        features: work?.features || null,
         warnings: work?.warnings || [],
         errors,
         staleDays: work?.staleDays ?? 14,

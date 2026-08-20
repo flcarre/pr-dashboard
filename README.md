@@ -39,7 +39,14 @@ Auto-refreshes every 120s — the **auto** button pauses it, **Refresh** forces 
   awaiting review, ones you approved or are blocking, drafts. Each card carries CI status,
   mergeability, diff size, labels, reviewers and its board status.
 - **Issues** — assigned to you, assigned but going stale (14+ days idle), mentions waiting on
-  you, ones you opened, and what you closed this week.
+  you, ones you opened, and what you closed this week. Every issue carries the **pull requests
+  linked to it**, listed underneath with their live state: open / draft / merged / closed, CI
+  result, review decision, merge conflicts, author and age. A badge on the issue row sums it up
+  (`PR open #123`, `draft PR`, `PR merged`, `no PR`), the toolbar filters by it (*PR in flight*,
+  *PR merged*, *no PR yet* — i.e. what to pick up next), and issues whose PR is already merged
+  get their own **PR merged, issue still open** section: the work shipped, the issue needs
+  closing. Rows also show when the issue was opened and by whom, and sub-issue progress
+  (`3/7 sub-issues`) when it has children.
 - **Notifications** — the part GitHub's own inbox hides:
   - *Unread* — nothing looked at yet.
   - *Moved since you read it* — you read it, then someone commented or pushed.
@@ -78,7 +85,10 @@ Other env vars: `PR_DASH_PORT` (default 7337), `PR_DASH_NO_OPEN=1` to skip openi
   `gh pr view` per PR for CI and review state.
 - `server/items.mjs` + `server/work.mjs` — one GraphQL sweep of issues and PRs assigned to,
   authored by or mentioning you, with their Projects v2 field values (status, sprint, epic,
-  priority, estimate, due date). Both the Issues and the Boards tabs come from this sweep.
+  priority, estimate, due date), their linked pull requests
+  (`closedByPullRequestsReferences`, so PRs that would close the issue — a PR that merely
+  mentions it is not counted) and their sub-issue progress. Both the Issues and the Boards tabs
+  come from this sweep.
 - `server/notifications.mjs` — `/notifications?all=true`, then a batched GraphQL lookup of
   each subject's open/closed/merged state — that state is what separates "forgotten" from
   "handled".

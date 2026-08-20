@@ -13,6 +13,26 @@ function ageDays(iso) {
 }
 
 /**
+ * Condense the pull requests linked to an issue into the one line the Issues
+ * view needs: is work in flight, is it merged (so the issue can be closed), or
+ * has nobody started.
+ */
+function summarizePrs(prs) {
+    const list = prs || []
+    if (list.length === 0) return {count: 0, state: "none", primary: null, hasOpen: false, hasMerged: false}
+    const open = list.filter((p) => p.state === "OPEN")
+    const merged = list.filter((p) => p.state === "MERGED")
+    const primary =
+        [...open].sort((a, b) => Number(a.isDraft) - Number(b.isDraft) || (b.updatedAt || "").localeCompare(a.updatedAt || ""))[0] ||
+        [...merged].sort((a, b) => (b.mergedAt || "").localeCompare(a.mergedAt || ""))[0] ||
+        list[0]
+    let state = "closed"
+    if (open.length) state = open.every((p) => p.isDraft) ? "draft" : "open"
+    else if (merged.length) state = "merged"
+    return {count: list.length, state, primary, hasOpen: open.length > 0, hasMerged: merged.length > 0}
+}
+
+/**
  * One GraphQL sweep of everything that could be "on my plate": issues and PRs
  * assigned to, authored by, or mentioning me, plus what closed recently.
  * Both the Issues and the Boards views are derived from this single sweep.
@@ -34,7 +54,9 @@ export async function getWork() {
         item.mine = item.author === me
         item.assignedToMe = item.assignees.includes(me)
         item.ageDays = ageDays(item.updatedAt)
+        item.openedDays = ageDays(item.createdAt)
         item.stale = item.state === "OPEN" && item.ageDays !== null && item.ageDays >= STALE_DAYS
+        item.prSummary = summarizePrs(item.linkedPrs)
     }
 
     return {me, items, errors, warnings, features, staleDays: STALE_DAYS}
@@ -45,6 +67,7 @@ export function groupIssues(work) {
     const issues = work.items.filter((i) => i.kind === "issue")
     const has = (i, s) => i.sources.includes(s)
     const groups = {
+        prMerged: [],
         assigned: [],
         assignedStale: [],
         mentioned: [],
@@ -54,6 +77,11 @@ export function groupIssues(work) {
     for (const issue of issues) {
         if (issue.state !== "OPEN") {
             if (has(issue, "closedRecently")) groups.closedRecently.push(issue)
+            continue
+        }
+        // A merged PR on a still-open issue is its own action: close the issue.
+        if ((issue.assignedToMe || has(issue, "authoredIssue")) && issue.prSummary?.state === "merged") {
+            groups.prMerged.push(issue)
             continue
         }
         if (issue.assignedToMe) {

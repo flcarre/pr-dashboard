@@ -57,7 +57,10 @@ By default it covers **all** orgs you touch. To scope it:
   to you, unreviewed) → `reviewsToDo`; you requested changes → `iBlocked`; else `iApproved`.
 - **Issues / Boards** — one GraphQL sweep of issues and PRs assigned to, authored by or
   mentioning you, carrying their Projects v2 field values. Issues bucket into assigned, assigned
-  &-stale (14+ days idle), mentions, authored, closed-this-week. Board rows group by sprint
+  &-stale (14+ days idle), mentions, authored, closed-this-week, plus PR-merged-issue-still-open.
+  Each issue also carries its linked PRs (from `closedByPullRequestsReferences`, i.e. PRs that
+  would close it — not plain mentions) with state, CI, review decision and conflicts, and its
+  sub-issue progress. The Issues toolbar filters on that: PR in flight / PR merged / no PR yet. Board rows group by sprint
   (iteration field, current one detected from its start date and duration), epic, status or
   priority. Epic resolution order: `Epic`-style board field → sub-issue parent → `epic:` label →
   milestone.
@@ -70,6 +73,9 @@ By default it covers **all** orgs you touch. To scope it:
 
 - **A single tab is empty** → check the warning banner: it names the missing scope. Run
   `gh auth refresh -s notifications,read:project`.
+- **No PR info on issues** → older GitHub Enterprise lacks
+  `closedByPullRequestsReferences`; the sweep drops the field, warns, and the Issues tab hides
+  the PR badges and filter rather than claiming every issue has no PR.
 - **Everything empty** → `gh auth status`; check the org filter isn't excluding it all
   (`echo $PR_DASH_ORGS`, inspect `pr-dashboard.config.json`); hit
   `/api/dashboard?force=1` to bypass the 60s cache and read the `errors` and `warnings` arrays.

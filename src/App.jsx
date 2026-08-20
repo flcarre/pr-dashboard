@@ -157,7 +157,7 @@ export default function App() {
                 <main className="content">
                     {tab === "focus" && <Focus data={data} query={query} onGo={setTab} />}
                     {tab === "prs" && <Prs prs={data.prs} query={query} />}
-                    {tab === "issues" && <Issues issues={data.issues} query={query} staleDays={data.staleDays} />}
+                    {tab === "issues" && <Issues issues={data.issues} query={query} staleDays={data.staleDays} features={data.features} />}
                     {tab === "inbox" && <Inbox notifications={data.notifications} query={query} />}
                     {tab === "boards" && <Boards boards={data.boards} query={query} warnings={data.warnings} />}
                 </main>

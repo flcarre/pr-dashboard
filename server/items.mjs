@@ -26,6 +26,29 @@ const PROJECT_ITEMS = `
         }
     }`
 
+const LINKED_PRS = `
+    closedByPullRequestsReferences(first: 6, includeClosedPrs: true) {
+        totalCount
+        nodes {
+            number
+            title
+            url
+            state
+            isDraft
+            merged
+            mergedAt
+            updatedAt
+            reviewDecision
+            mergeable
+            author { login }
+            repository { nameWithOwner }
+            commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+        }
+    }`
+
+const SUB_ISSUES = `
+    subIssuesSummary { total completed percentCompleted }`
+
 const COMMON = `
     number
     title
@@ -47,6 +70,8 @@ const COMMON = `
 function buildQuery(features) {
     const projects = features.projects ? PROJECT_ITEMS : ""
     const parent = features.parent ? "parent { number title url state repository { nameWithOwner } }" : ""
+    const linkedPrs = features.linkedPrs ? LINKED_PRS : ""
+    const subIssues = features.subIssues ? SUB_ISSUES : ""
     return `
     query($q: String!, $first: Int!, $after: String) {
         search(query: $q, type: ISSUE, first: $first, after: $after) {
@@ -59,6 +84,8 @@ function buildQuery(features) {
                     closedAt
                     stateReason
                     ${parent}
+                    ${linkedPrs}
+                    ${subIssues}
                     ${projects}
                 }
                 ... on PullRequest {
@@ -166,6 +193,28 @@ function shapeProjectItem(item) {
     return out
 }
 
+const CI_TONES = {SUCCESS: "green", FAILURE: "red", ERROR: "red", PENDING: "blue", EXPECTED: "blue"}
+
+function shapeLinkedPr(node) {
+    const rollup = node.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state || null
+    const merged = !!node.merged
+    return {
+        kind: "pr",
+        repo: node.repository?.nameWithOwner || "",
+        number: node.number,
+        title: node.title,
+        url: node.url,
+        state: merged ? "MERGED" : (node.state || "").toUpperCase(),
+        isDraft: !!node.isDraft,
+        mergedAt: node.mergedAt || null,
+        updatedAt: node.updatedAt || null,
+        reviewDecision: node.reviewDecision || null,
+        conflicts: node.mergeable === "CONFLICTING",
+        author: node.author?.login || "",
+        ci: rollup ? {state: rollup, tone: CI_TONES[rollup] || "neutral"} : null,
+    }
+}
+
 function shapeItem(node) {
     const isPr = node.__typename === "PullRequest"
     const repo = node.repository?.nameWithOwner || ""
@@ -198,13 +247,21 @@ function shapeItem(node) {
                   repo: node.parent.repository?.nameWithOwner || "",
               }
             : null,
+        linkedPrs: (node.closedByPullRequestsReferences?.nodes || []).filter(Boolean).map(shapeLinkedPr),
+        subIssues: node.subIssuesSummary?.total
+            ? {
+                  total: node.subIssuesSummary.total,
+                  completed: node.subIssuesSummary.completed ?? 0,
+                  percent: node.subIssuesSummary.percentCompleted ?? 0,
+              }
+            : null,
         boards: (node.projectItems?.nodes || []).filter((n) => n && !n.isArchived).map(shapeProjectItem),
         sources: [],
     }
 }
 
 /** Feature support is discovered once and reused across queries. */
-const features = {projects: true, parent: true}
+const features = {projects: true, parent: true, linkedPrs: true, subIssues: true}
 const warnings = new Set()
 
 function degrade(error) {
@@ -216,6 +273,16 @@ function degrade(error) {
         warnings.add(
             "Project (board) data is unavailable: the gh token lacks the `read:project` scope. Run `gh auth refresh -s read:project,project` to enable the Boards tab.",
         )
+    }
+    if (features.linkedPrs && /closedByPullRequestsReferences/i.test(msg)) {
+        features.linkedPrs = false
+        changed = true
+        warnings.add("Linked pull requests are unavailable on this GitHub version; issues show without their PR status.")
+    }
+    if (features.subIssues && /subIssuesSummary/i.test(msg)) {
+        features.subIssues = false
+        changed = true
+        warnings.add("Sub-issue progress is unavailable on this GitHub version.")
     }
     if (features.parent && /\bparent\b/i.test(msg)) {
         features.parent = false

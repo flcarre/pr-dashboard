@@ -9,6 +9,7 @@ const LANES = {
     inbox: {emoji: "🔔", label: "inbox"},
     sprint: {emoji: "🏃", label: "sprint"},
     stale: {emoji: "🕸️", label: "stale"},
+    close: {emoji: "🏁", label: "close"},
 }
 
 const URGENCIES = [
@@ -47,6 +48,7 @@ export default function Focus({data, query, onGo}) {
                 <StatTile label="ready to merge" value={stats.readyToMerge} tone={stats.readyToMerge ? "green" : "neutral"} onClick={() => onGo("prs")} />
                 <StatTile label="my PRs blocked" value={stats.blockedPrs} tone={stats.blockedPrs ? "orange" : "neutral"} onClick={() => onGo("prs")} />
                 <StatTile label="assigned issues" value={stats.assignedIssues} tone={stats.staleIssues ? "orange" : "neutral"} hint={stats.staleIssues ? `${stats.staleIssues} going stale` : undefined} onClick={() => onGo("issues")} />
+                <StatTile label="issues to close" value={stats.issuesToClose} tone={stats.issuesToClose ? "purple" : "neutral"} hint="Open issues whose PR is already merged" onClick={() => onGo("issues")} />
                 <StatTile label="unread inbox" value={stats.unread} tone={stats.unread ? "blue" : "neutral"} onClick={() => onGo("inbox")} />
                 <StatTile label="opened & forgotten" value={stats.forgotten} tone={stats.forgotten ? "orange" : "neutral"} hint="Read but never cleared, still open" onClick={() => onGo("inbox")} />
                 <StatTile label="in current sprint" value={stats.sprintItems} tone="purple" onClick={() => onGo("boards")} />
